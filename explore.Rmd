@@ -1,0 +1,223 @@
+---
+title: 'House Prices: Exploration'
+author: "Aleksei Neverov"
+date: '2 марта 2018 г '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(caret)
+library(Metrics)
+library(mlr)
+```
+
+```{r}
+data <- read.csv("train.csv")
+head(data)
+str(data)
+data.id <- data$Id
+data <- data %>% select(-Id)
+```
+
+```{r}
+imputeNumeric <- function(col) {
+  x.mean <- mean(col, na.rm = TRUE)
+  col[is.na(col)] <- x.mean
+  return(col)
+}
+
+imputeFactors <- function(col) {
+  levels(col) <- c(levels(col), "Missing")
+  col[is.na(col)] <-"Missing"
+  return(col)
+}
+
+imputeDataSet <- function(ds) {
+  tmp <- ds
+  for (col in names(tmp)) {
+    if (sum(is.na(tmp[[col]])) > 0) {
+      if (is.factor(tmp[[col]])) {
+        tmp[[col]] = imputeFactors(tmp[[col]])
+      } 
+      else if (is.numeric(tmp[[col]])) {
+        tmp[[col]] = imputeNumeric(tmp[[col]])
+      }
+    }
+  }
+  return(tmp)
+}
+```
+
+```{r}
+checkNas <- function(ds) {
+  columns <- names(ds)
+  col.nas <- sapply(columns, function(c) {sum(is.na(ds[[c]]))})
+  pcn.nas <- sapply(columns, function(c) {sum(is.na(ds[[c]])) / length(ds[[c]])})
+  num.nas <- data.frame(Column = columns, NumNas = col.nas, PcnNas = pcn.nas)
+  return(num.nas)
+}
+
+removeHighLevelNas <- function(data, nas.info, nas.level = .9){
+  col.stay <- as.character(nas.info[nas.info$PcnNas < nas.level, 'Column'])
+  return(data[, col.stay])
+}
+```
+
+```{r}
+data.nas <- checkNas(data)
+data <- removeHighLevelNas(data, data.nas)
+data <- imputeDataSet(data)
+checkNas(data)
+```
+```{r}
+FactorToInt <- function(col) {
+  lev <- levels(col)
+  y <- sapply(col, function(x) {which(lev == x)} )
+  return(y)
+}
+
+factorizeDS <- function(ds) {
+  tmp = ds
+  for (col in names(tmp)) {
+    if (is.factor(tmp[[col]]))
+      tmp[[col]] = FactorToInt(tmp[[col]])
+  }
+  return(tmp)
+}
+```
+
+```{r}
+data <- factorizeDS(data)
+sum(checkNas(data)$NumNas >0)
+```
+```{r}
+data.SalePrice <- data$SalePrice
+data.nzv <- nearZeroVar(data[,-dim(data)[2]], saveMetrics = TRUE, names = TRUE)
+data.nzv
+nzv.vars <- data.nzv[data.nzv$zeroVar == FALSE  &  data.nzv$nzv == FALSE,]
+data <- data[, rownames(nzv.vars)]
+data['SalePrice'] =  data.SalePrice
+```
+
+```{r}
+data.cor = round(cor(data), 2)
+data.mlt = melt(data.cor)
+good.cor  = data.mlt %>%
+  filter(Var1 == "SalePrice" & value > .5) 
+data.mlt<- data.mlt %>%
+  filter(Var2 %in% good.cor$Var2) %>%
+  filter(Var1 %in% good.cor$Var2) 
+  
+```
+
+```{r}
+g <- ggplot(data = data.mlt, aes(x=Var1, y=Var2, fill=value)) 
+g <- g + geom_tile()
+g
+```
+
+
+```{r}
+data <- data[,good.cor$Var2]
+for (col in names(data)){
+   data[[col]] = as.numeric(data[[col]])
+}
+```
+
+```{r}
+#   
+# set.seed(0)
+# inTrain <- createDataPartition(data$SalePrice, p = .7, list = FALSE)
+# train <- data[inTrain,]
+# valid <- data[-inTrain,]
+# 
+# y_train <- log(train$SalePrice + 1)
+# x_train <- train %>% dplyr::select(-SalePrice)
+# 
+# y_valid <- log(valid$SalePrice + 1)
+# x_valid <- valid %>% dplyr::select(-SalePrice)
+
+```
+
+```{r}
+library(mlr)
+data.log <- data
+data.log$SalePrice <- log(data$SalePrice + 1)
+tsk = makeRegrTask(data = data.log, target = 'SalePrice')
+ho  = makeResampleInstance("Holdout", tsk, split = .7)
+tsk.train = subsetTask(tsk, ho$train.inds[[1]])
+tsk.valid = subsetTask(tsk, ho$test.inds[[1]])
+```
+
+```{r}
+#GBM
+# gbm_lrn = makeLearner("regr.gbm", par.vals = list(n.trees = 2200, interaction.depth = 10))
+# cv      = makeResampleDesc("CV", iters = 5)
+# res     = resample(gbm_lrn, tsk.train, cv, rmse)
+# 
+# gbm_model = mlr::train(gbm_lrn, tsk.train)
+# gbm_pred  = predict(gbm_model, tsk.valid)
+# performance(gbm_pred,list(rmse, mse))
+```
+
+```{r}
+# xgb_lrn = makeLearner("regr.gbm") #, par.vals = list(n.trees = 2200, interaction.depth = 10)
+# cv      = makeResampleDesc("CV", iters = 5)
+# res     = resample(gbm_lrn, tsk.train, cv, rmse)
+# 
+# gbm_model = mlr::train(gbm_lrn, tsk.train)
+# gbm_pred  = predict(gbm_model, tsk.valid)
+# x <- performance(gbm_pred,list(rmse, mse))
+# 
+# res = hyperopt()
+
+```
+
+```{r}
+
+lrn.list = listLearners()
+lrn.list = lrn.list[lrn.list$type == "regr",]$class
+lrn.res = NULL
+p_train = NULL
+p_test = NULL
+
+cv      = makeResampleDesc("CV", iters = 5)
+
+for (learner in lrn.list) {
+  lrn = makeLearner(learner)
+  res     = resample(lrn, tsk.train, cv, rmse)
+  model = mlr::train(lrn, tsk.train)
+  valid.p  = predict(model,tsk.valid)
+  train.p  = predict(model,tsk.train)
+  x <- performance(valid.p, list(rmse, mse))
+  
+  d = data.frame(Learner = learner, mse = x[2], rmse = NA)
+  if (is.null(lrn.res)) {
+    lrn.res = d
+  } else {
+    lrn.res = rbind(lrn.res, d)
+  }
+  
+  if (is.null(p_train)) {
+    p_train = data.frame(learner = train.p)
+    p_valid = data.frame(learner = valid.p)
+    
+  } else {
+    p_train = cbind(p_train, data.frame(learner = train.p))
+    p_valid = cbind(p_valid, data.frame(learner = valid.p))
+  }
+}
+
+lrn.res
+```
+
+```{r}
+library(xgboost)
+```  
